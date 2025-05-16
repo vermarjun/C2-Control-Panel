@@ -7,6 +7,7 @@ from typing import List, Optional
 from sliver import SliverClientConfig, SliverClient
 import asyncio
 import time
+from fastapi import Query
 
 class Session(BaseModel):
     id: str
@@ -64,6 +65,52 @@ async def get_client() -> SliverClient:
         raise HTTPException(status_code=500, detail="Sliver client not initialized")
     return _client
 
+# @app.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get details for a specific session"""
+    print("request to session came")
+    try:
+        client = await get_client()
+        sessions = await client.sessions()
+        for session in sessions:
+            if session.ID == session_id:
+                return client
+        raise HTTPException(status_code=404, detail="Session not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sessions/{session_id}/files")
+async def list_files(session_id: str, path: Optional[str] = Query("/")):
+    try:
+        client = await get_client()
+        sessions = await client.sessions()
+        session_obj = next((s for s in sessions if s.ID == session_id), None)
+        if not session_obj:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session = await client.interact_session(session_id)
+
+        if "windows" in session_obj.OS.lower():
+            # Windows payload
+            command = "cmd.exe"
+            args = ["/c", f"dir {path}"]
+        else:
+            # *nix payload
+            command = "ls"
+            args = ["-la", path]
+
+        result = await session.execute(command, args, output=True)
+        output = result.result
+
+        # You can parse dir output differently for windows or unix
+        return {
+            "path": path,
+            "output": output
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/connected")
 async def connected_or_not():
     global _client
@@ -104,27 +151,17 @@ async def connect_sliver():
         _client = None
         return False
 
-@app.get("/sessions", response_model=List[Session], responses={500: {"model": ErrorResponse}})
+@app.get("/sessions")
 async def list_sessions():
+    print("request to sessions came")
     """List all active sessions"""
-    time.sleep(5)
     try:
         client = await get_client()
         sessions = await client.sessions()
-        return [Session(**session) for session in sessions]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/sessions/{session_id}", response_model=Session, responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
-async def get_session(session_id: str):
-    """Get details for a specific session"""
-    try:
-        client = await get_client()
-        sessions = await client.sessions()
+        sessions_to_be_returned = []
         for session in sessions:
-            if session["id"] == session_id:
-                return Session(**session)
-        raise HTTPException(status_code=404, detail="Session not found")
+            sessions_to_be_returned.append({"id":session.ID, "hostname":session.Hostname, "username":session.Username, "transport":session.Transport, "remoteaddress":session.RemoteAddress, "os":session.OS})
+        return sessions_to_be_returned
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
