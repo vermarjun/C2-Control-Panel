@@ -8,6 +8,9 @@ from sliver import SliverClientConfig, SliverClient
 import asyncio
 import time
 from fastapi import Query
+from fastapi.responses import JSONResponse
+import base64
+from fastapi.responses import Response
 
 class CommandItem(BaseModel):
     command: str
@@ -120,6 +123,7 @@ async def list_files(session_id: str, path: Optional[str] = Query("/")):
     except Exception as e:
         print(f"Error connecting to session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
     
 @app.post("/interactwithsession")
 async def interact_with_session(item: CommandItem):
@@ -141,17 +145,44 @@ async def interact_with_session(item: CommandItem):
         elif (commands[0] == 'cd'):
             result = await _current_interactive_session.cd(commands[1])
             print(result)
+        elif (commands[0] == 'screenshot'):
+            result = await _current_interactive_session.screenshot()
+            # print(result)
+            # png_data = result.data
+            # print(result)
+            base64_data = base64.b64encode(result).decode("utf-8")
+            return JSONResponse(content={"image": base64_data})
+
         return {
             "status": "success",
             "result":str(result),
         }
 
     except Exception as e:
-        print(e)
+        print("error: ", e)
         return {
             "status": "error",
             "detail": str(e)
         }
+
+@app.get("/screenshot")
+async def get_screenshot():
+    global _current_interactive_session
+    try:
+        # Get screenshot from sliver session
+        screenshot_pb = await _current_interactive_session.screenshot()
+        # Extract PNG data from protobuf
+        png_data = screenshot_pb.Data  # or screenshot_pb.image_data
+        # Return as image response
+        return Response(
+            content=png_data,
+            media_type="image/png",
+            headers={"Cache-Control": "no-cache"}
+        )
+        
+    except Exception as e:
+        print("error: ", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/connected")
 async def connected_or_not():
