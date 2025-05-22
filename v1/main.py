@@ -9,6 +9,9 @@ import asyncio
 import time
 from fastapi import Query
 
+class CommandItem(BaseModel):
+    command: str
+
 class Session(BaseModel):
     id: str
     name: str
@@ -30,6 +33,7 @@ class ErrorResponse(BaseModel):
 
 # Global client instance
 _client = None
+_current_interactive_session = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -85,31 +89,69 @@ async def list_files(session_id: str, path: Optional[str] = Query("/")):
         client = await get_client()
         sessions = await client.sessions()
         session_obj = next((s for s in sessions if s.ID == session_id), None)
+
         if not session_obj:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        session = await client.interact_session(session_id)
-
-        if "windows" in session_obj.OS.lower():
-            # Windows payload
-            command = "cmd.exe"
-            args = ["/c", f"dir {path}"]
-        else:
-            # *nix payload
-            command = "ls"
-            args = ["-la", path]
-
-        result = await session.execute(command, args, output=True)
-        output = result.result
-
-        # You can parse dir output differently for windows or unix
+        global _current_interactive_session
+        _current_interactive_session = await client.interact_session(session_id)
         return {
-            "path": path,
-            "output": output
+            "status": "connected", 
+            "session_id": session_id, 
+            "Name": session_obj.Name,
+            "Hostname" : session_obj.Hostname,
+            "Username" : session_obj.Username,
+            "UID" : session_obj.UID,
+            "GID" : session_obj.GID,
+            "OS" : session_obj.OS,
+            "Arch" : session_obj.Arch,
+            "Remote Address" : session_obj.RemoteAddress,
+            "PID" : session_obj.PID,
+            "Filename" : session_obj.Filename,
+            "Active C2": session_obj.ActiveC2,
+            "Version" : session_obj.Version,               
+            "Reconnect Interval": session_obj.ReconnectInterval,
+            "Proxy URL": session_obj.ProxyURL,
+            "Burned" : session_obj.Burned,
+            "Extensions" :session_obj.Extensions,
+            # "Config": session_obj.config
+            }
+
+    except Exception as e:
+        print(f"Error connecting to session: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/interactwithsession")
+async def interact_with_session(item: CommandItem):
+    print("Interact with session request came: ")
+    global _current_interactive_session
+    if _current_interactive_session is None:
+        raise HTTPException(status_code=400, detail="Session not initialized")
+    
+    # print(item)
+    commands = [item.strip() for item in item.command.split(',')]
+    print(commands)
+    
+    try:
+        result = "" 
+        if (commands[0] == 'ls'):
+            # print("executing ls command")
+            result = await _current_interactive_session.ls()
+            # print(result)
+        elif (commands[0] == 'cd'):
+            result = await _current_interactive_session.cd(commands[1])
+            print(result)
+        return {
+            "status": "success",
+            "result":str(result),
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(e)
+        return {
+            "status": "error",
+            "detail": str(e)
+        }
 
 @app.get("/connected")
 async def connected_or_not():
