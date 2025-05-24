@@ -99,8 +99,8 @@ async def list_files(session_id: str, path: Optional[str] = Query("/")):
         global _current_interactive_session
         _current_interactive_session = await client.interact_session(session_id)
         return {
-            "status": "connected", 
-            "session_id": session_id, 
+            "status": session_obj.IsDead, 
+            "session_id": session_obj.ID, 
             "Name": session_obj.Name,
             "Hostname" : session_obj.Hostname,
             "Username" : session_obj.Username,
@@ -123,7 +123,6 @@ async def list_files(session_id: str, path: Optional[str] = Query("/")):
     except Exception as e:
         print(f"Error connecting to session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
     
 @app.post("/interactwithsession")
 async def interact_with_session(item: CommandItem):
