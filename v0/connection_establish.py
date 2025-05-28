@@ -2,7 +2,7 @@ import os
 import asyncio
 from sliver import SliverClientConfig, SliverClient
 
-CONFIG_PATH = os.path.join('../arjun.cfg')
+CONFIG_PATH = os.path.join('./arjun.cfg')
 
 async def main():
     ''' Async client connect example '''
