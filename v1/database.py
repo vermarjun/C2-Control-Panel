@@ -25,7 +25,10 @@ from models import (
     
     # Auth models
     Token,
-    TokenData
+    TokenData,
+    
+    # Utility functions
+    generate_device_id
 )
 
 from jose import JWTError, jwt
@@ -106,6 +109,7 @@ async def init_db():
         
         # Session collection indexes
         await sessions_collection.create_index("session_id", unique=True)
+        await sessions_collection.create_index("device_id")  # Index for device_id queries
         await sessions_collection.create_index("last_seen", expireAfterSeconds=30*24*60*60)  # 30 days TTL
         await sessions_collection.create_index([("is_dead", 1), ("last_seen", -1)])
         await sessions_collection.create_index("remote_address")
@@ -646,6 +650,10 @@ async def update_sliver_session(payload: Dict[str, Any]) -> None:
     try:
         now = datetime.now(UTC)
         
+        # Generate device_id from session data
+        device_id = generate_device_id(payload)
+        payload["device_id"] = device_id
+        
         # Validate the payload using the model
         try:
             session = SliverSession(**payload)
@@ -679,7 +687,7 @@ async def update_sliver_session(payload: Dict[str, Any]) -> None:
                 "last_seen": now
             }
             result = await sessions_collection.insert_one(new_session)
-            print(f"Created new Sliver session {session_data['session_id']} - first_seen: {now}")
+            print(f"Created new Sliver session {session_data['session_id']} with device_id {device_id} - first_seen: {now}")
             
     except Exception as e:
         print(f"Error updating Sliver session: {e}")
@@ -712,6 +720,15 @@ async def delete_sliver_session(session_id: str) -> bool:
     except Exception as e:
         print(f"Error deleting Sliver session: {e}")
         return False
+
+async def get_sessions_by_device_id(device_id: str) -> List[SliverSession]:
+    """Get all sessions for a specific device ID"""
+    try:
+        sessions = await sessions_collection.find({"device_id": device_id}).to_list(length=None)
+        return [SliverSession(**session) for session in sessions]
+    except Exception as e:
+        print(f"Error getting sessions by device_id: {e}")
+        return []
 
 # User login operations
 async def update_user_last_login(username: str) -> None:

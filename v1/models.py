@@ -5,6 +5,7 @@ from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
 from bson import ObjectId
 import json
+import hashlib
 
 # ObjectId validation and serialization
 def validate_object_id(v: Any) -> ObjectId:
@@ -16,6 +17,12 @@ def validate_object_id(v: Any) -> ObjectId:
 
 def serialize_object_id(obj: ObjectId) -> str:
     return str(obj)
+
+# device fingerprinting
+def generate_device_id(session_data: Dict[str, Any]) -> str:
+    """Generate a unique device ID by hashing hostname, username, uid, gid, and os"""
+    unique_string = f"{session_data['hostname']}-{session_data['username']}-{session_data['uid']}-{session_data['gid']}-{session_data['os']}"
+    return hashlib.sha256(unique_string.encode()).hexdigest()
 
 # Custom ObjectId type with Pydantic v2 support
 class PyObjectId(ObjectId):
@@ -332,6 +339,11 @@ class SliverSession(MongoBaseModel):
         min_length=1,
         description="Unique identifier for the Sliver session"
     )
+    device_id: str = Field(
+        ...,
+        min_length=1,
+        description="Unique device identifier generated from hostname, username, uid, gid, and os"
+    )
     name: str = Field(..., min_length=1)
     hostname: str = Field(..., min_length=1)
     username: str = Field(..., min_length=1)
@@ -373,6 +385,7 @@ class SliverSession(MongoBaseModel):
         json_schema_extra={
             "example": {
                 "session_id": "aae73700-05d2-4ddf-8585-ef2dbd6480b2",
+                "device_id": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
                 "name": "CONSERVATION_FUNCTION",
                 "hostname": "Arjun",
                 "username": "ARJUN\\verma",

@@ -61,7 +61,8 @@ from models import (
     FailedLoginAttempt,
     SessionToken,
     PasswordChange,
-    PyObjectId
+    PyObjectId,
+    generate_device_id
 )
 from database import (
     # User operations
@@ -282,6 +283,8 @@ async def list_sliver_sessions(current_user: User = Depends(get_current_active_u
                         "first_seen": int(db_session.first_seen.timestamp()),
                         "last_seen": int(db_session.last_seen.timestamp())
                     }
+                    # Generate device_id for the session data
+                    session_data["device_id"] = generate_device_id(session_data)
                     await update_sliver_session(session_data)
                 except Exception as e:
                     print(f"Error updating dead status for session {db_session.session_id}: {e}")
@@ -324,6 +327,9 @@ async def list_sliver_sessions(current_user: User = Depends(get_current_active_u
                     "last_seen": last_checkin     # Keep as integer
                 }
                 
+                # Generate device_id for the session data
+                session_data["device_id"] = generate_device_id(session_data)
+                
                 # Update session in database
                 try:
                     await update_sliver_session(session_data)
@@ -338,6 +344,7 @@ async def list_sliver_sessions(current_user: User = Depends(get_current_active_u
                     "transport": session_data["transport"],
                     "remote_address": session_data["remote_address"],
                     "os": session_data["os"],
+                    "version": session_data["version"],
                     "firstContact": first_contact,  # Send as integer
                     "lastCheckIn": last_checkin,    # Send as integer
                     "isDead": session_data["is_dead"],
@@ -359,6 +366,7 @@ async def list_sliver_sessions(current_user: User = Depends(get_current_active_u
                         "transport": db_session.transport,
                         "remote_address": db_session.remote_address,
                         "os": db_session.os,
+                        "version": session_data["version"],
                         "firstContact": int(db_session.first_seen.timestamp()),  # Convert to integer
                         "lastCheckIn": int(db_session.last_seen.timestamp()),    # Convert to integer
                         "isDead": True,  # Mark as dead since not in active sessions
@@ -423,6 +431,9 @@ async def get_sliver_session_details(
             "extensions": session.Extensions or {},
             "is_dead": session.IsDead
         }
+        
+        # Generate device_id for the session data
+        session_data["device_id"] = generate_device_id(session_data)
         
         # Update session in database
         await update_sliver_session(session_data)
